@@ -1,80 +1,47 @@
-import json
 import random
+class dataloader:
+    def __init__(self, df, tokenizer, max_len):
+        self.df = df.reset_index(drop=True)
+        self.tokenizer = tokenizer
+        self.max = max_len
 
-class DataLoader:
-    def __init__(self,pth,max):
-        self.pth = pth
-        self.data = self.datas()
-        self.max = max
-
-    def datas(self):
-        a = []
-        b = []
-        with open(self.pth,'r') as r:
-            datas = json.load(r)
-        for i in datas:
-            a.append(i["input"])
-            b.append(i["output"])
-        return (a,b)
-    
     def GetData(self):
-        rand = random.randint(0,len(self.data[0])-1)
-        return self.data[0][rand],self.data[1][rand]
+        idx = random.randint(0, len(self.df) - 1)
+        return self.df.loc[idx, 'text']
 
-    def preprocess(self,tokenizer,commands = None):
-        #检查问题是不是因为输入...
-        NoneTemp = False
-        if getattr(tokenizer, "chat_template", None) is None:
-            NoneTemp = True
-        #为了检测输入不超限
+    def preprocess(self):
         while True:
-            DataProcessing = self.GetData()
-            input = DataProcessing[0]
-            label = DataProcessing[1]
-            if(commands == None):
-                commands = "You are a helpful AI assistant."
-            messages_Q = [
-            {"role": "system", "content": commands},
-            {"role": "user", "content": DataProcessing[0]}
-            ]
-            messages_A = [
-                {"role": "system", "content": commands},
-                {"role": "user", "content": DataProcessing[0]},
-                {"role": "assistant", "content": DataProcessing[1]}
-            ]
-            # if NoneTemp == False:
-            if True:
-                check = tokenizer.apply_chat_template(
-                    messages_Q,
-                    tokenize=True,
-                    add_generation_prompt=True
-                )
-            else:
-                check = tokenizer.encode("System:[START]"+commands+"[END]\n"+"User:[START]"+DataProcessing[0]+"[END]\n"+"Assistent:[START]")
-            if(len(check) < self.max):
-                start_idx = len(check)
+            full_text = self.GetData()
+
+            # Cari batas response
+            split_key = "### Response:"
+            resp_index = full_text.find(split_key)
+
+            if resp_index == -1:
+                print("Warning: No response found, skipping sample.")
+                continue  # skip sample
+
+            inp_str = full_text[:resp_index + len(split_key)].strip()
+            out_str = full_text[resp_index + len(split_key):].strip()
+
+            full_concat = inp_str + "\n" + out_str
+
+            # Tokenisasi
+            tokenized = self.tokenizer(full_concat, return_tensors="pt", truncation=True, max_length=self.max)
+            input_ids = tokenized.input_ids[0]
+            attention_mask = tokenized.attention_mask[0]
+
+            # Cek panjang input
+            if len(input_ids) < self.max:
                 break
             else:
-                print("warning, input bigger than max may cause memory run out!")
-        # if(NoneTemp == False):
-        messages_Q = [
-            {"role": "system", "content": commands},
-            {"role": "user", "content": DataProcessing[0]},
-            #TMD更改模型这里还得改我真是操了要改特殊标记
-            #{"role": "assistant", "content": "[EMPTY]" + DataProcessing[1]}
-            {"role": "assistant", "content": "[EMPTY]" + DataProcessing[1]}
-            ]
-        input_total = tokenizer.apply_chat_template(
-            messages_Q,
-            tokenize=True,
-            add_generation_prompt=False
-        )
-        #预处理为因果类格式
-        input_total = input_total[:-1]
-        label_total = tokenizer.apply_chat_template(
-            messages_A,
-            tokenize=True,
-            add_generation_prompt=False
-        )
-        #此处要调整成到最大范围
-        return input_total[:self.max],label_total[:self.max],input,label,start_idx
+                print("Warning: input too long, retrying...")
+
+        # Token index dari akhir instruction untuk masking label
+        start_idx = len(self.tokenizer(inp_str, return_tensors="pt").input_ids[0])
+
+        # Siapkan label (mask bagian sebelum start_idx dengan -100)
+        label_ids = input_ids.clone()
+        label_ids[:start_idx] = -100
+
+        return input_ids, label_ids, inp_str, out_str, start_idx
