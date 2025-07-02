@@ -1,5 +1,5 @@
 import random
-class dataloader:
+class DataLoader:
     def __init__(self, df, tokenizer, max_len):
         self.df = df.reset_index(drop=True)
         self.tokenizer = tokenizer
